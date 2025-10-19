@@ -6,7 +6,8 @@
 #include <DHT.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include "wifi_credentials.h" // Wi-Fi接続情報
+#include "secrets.h"          // MACアドレスなどの機密情報
+#include "wol.h"              // WoL送信関数
 
 // --- 静的IPアドレスの設定 ---
 // ご自身のネットワーク環境に合わせて変更してください
@@ -15,6 +16,9 @@ IPAddress gateway(192, 168, 223, 1);    // ルーターのIPアドレス
 IPAddress subnet(255, 255, 255, 0);   // サブネットマスク
 IPAddress primaryDNS(8, 8, 8, 8);     // (オプション) プライマリDNS
 IPAddress secondaryDNS(8, 8, 4, 4);   // (オプション) セカンダリDNS
+
+// スイッチが接続されているピン
+#define SWITCH_PIN 5 // D1ピンを使用
 
 // DHTセンサーのピン定義とタイプ定義
 #define DHTPIN 2     // D4ピンに接続
@@ -50,6 +54,9 @@ void setup() {
     delay(10); // シリアルポートが接続されるのを待つ
   }
   
+  // スイッチのピンを入力モードに設定 (内蔵プルアップ抵抗を有効化)
+  pinMode(SWITCH_PIN, INPUT_PULLUP);
+
   Serial.println(F("Booting..."));
 
   // 起動時に画面をクリアし、接続中メッセージを表示
@@ -67,10 +74,6 @@ void setup() {
     display.println(F("IP config failed")); // OLEDにも表示
     display.display();
   }
-  // 接続試行中のSSIDとパスワードをデバッグ用にシリアル出力
-  Serial.print(F("Connecting to SSID: "));
-  Serial.println(ssid);
-  // 注意: パスワードのシリアル出力はデバッグ目的に限定してください
 
   // Wi-Fiに接続
   WiFi.begin(ssid, password);
@@ -82,7 +85,6 @@ void setup() {
   Serial.println(" Connected!");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
-
 
   // I2C通信を初期化 (ピンを指定)
   Wire.begin(I2C_SDA, I2C_SCL);
@@ -107,6 +109,25 @@ void setup() {
 }
 
 void loop() {
+  // スイッチが押されたかチェック (押されるとLOWになる)
+  if (digitalRead(SWITCH_PIN) == LOW) {
+    Serial.println("Switch pressed. Sending WoL packet...");
+
+    // OLEDに送信中メッセージを表示
+    display.clearDisplay();
+    display.setTextSize(2);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 24);
+    display.println(F("Sending"));
+    display.println(F("  WoL..."));
+    display.display();
+
+    // 自作関数でWoLマジックパケットを送信
+    sendWolPacket(MAC_ADDRESS);
+
+    delay(2000); // メッセージを2秒間表示
+  }
+
   // センサーからの読み取りには250ms以上かかるため、2秒待機します。
   delay(2000);
 
@@ -150,17 +171,11 @@ void loop() {
   display.setCursor(12, 0); // 中央寄りに配置
   display.println(timeStr);
 
-  // 2行目: 温度
+  // 下段: 温度と湿度
   display.setTextSize(2);
-  display.setCursor(0, 24);
-  display.print(temperature, 1);
-  display.print((char)247); // °記号
-  display.println("C");
-
-  // 3行目: 湿度
-  display.setTextSize(2);
-  display.setCursor(0, 48);
-  display.print(F("Humi: ")); display.print(humidity, 0); display.print(F("%"));
+  display.setCursor(0, 30);
+  display.print(temperature, 1); display.print((char)247); display.print("C ");
+  display.print(humidity, 0); display.print("%");
 
   display.display(); // 画面に描画
 }
