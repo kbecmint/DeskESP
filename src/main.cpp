@@ -8,6 +8,7 @@
 #include <Adafruit_SSD1306.h>
 #include "secrets.h"          // MACアドレスなどの機密情報
 #include "wol.h"              // WoL送信関数
+#include "weather.h"          // 天気情報取得関数
 
 // --- 静的IPアドレスの設定 ---
 // ご自身のネットワーク環境に合わせて変更してください
@@ -46,6 +47,12 @@ const int   daylightOffset_sec = 0;   // 夏時間なし
 DHT dht(DHTPIN, DHTTYPE);
 // OLEDディスプレイのオブジェクトを作成
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// 天気情報更新用の変数
+unsigned long lastWeatherCheck = 0;
+const long weatherCheckInterval = 10 * 60 * 1000; // 10分 (ミリ秒)
+bool isRainingSoon = false;
+int rainTime = 0;
 
 void setup() {
   // シリアル通信を初期化
@@ -108,6 +115,30 @@ void setup() {
   Serial.println("---------------------------------");
 }
 
+// 雨雲接近の通知を描画する関数
+void drawRainWarning() {
+  display.setTextSize(1);
+  display.setCursor(0, 56);
+  // isRainingSoonフラグに応じて文字色を切り替える
+  if (isRainingSoon) {
+    // 雨が近い場合は文字色を反転（黒文字、白背景）させて強調
+    display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+    display.print("Rain in ");
+    if (rainTime == 0) {
+      // 表示が切り替わる際に前の表示が残らないよう、空白で埋める
+      display.print("now!        ");
+    } else {
+      display.print(rainTime);
+      display.print("min");
+    }
+  } else {
+    // 通常時は白文字
+    display.setTextColor(SSD1306_WHITE);
+    display.print("No rain for 1hr");
+  }
+}
+
+
 void loop() {
   // スイッチが押されたかチェック (押されるとLOWになる)
   if (digitalRead(SWITCH_PIN) == LOW) {
@@ -128,8 +159,17 @@ void loop() {
     delay(2000); // メッセージを2秒間表示
   }
 
-  // センサーからの読み取りには250ms以上かかるため、2秒待機します。
-  delay(2000);
+  // 天気情報を定期的にチェック
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastWeatherCheck >= weatherCheckInterval) {
+    lastWeatherCheck = currentMillis;
+    Serial.println("\nChecking for rain clouds...");
+    RainInfo rainInfo = checkRainCloud();
+    isRainingSoon = rainInfo.willRain;
+    rainTime = rainInfo.minutesUntilRain;
+  }
+
+  delay(1000); // 1秒待機
 
   // 湿度と温度を読み取る
   float humidity = dht.readHumidity();
@@ -176,6 +216,9 @@ void loop() {
   display.setCursor(0, 30);
   display.print(temperature, 1); display.print((char)247); display.print("C ");
   display.print(humidity, 0); display.print("%");
+
+  // 雨雲情報を表示
+  drawRainWarning();
 
   display.display(); // 画面に描画
 }
