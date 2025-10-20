@@ -2,6 +2,8 @@
 #include <Wire.h>
 #include <ESP8266WiFi.h>
 #include <time.h> // 時刻取得用
+#include <ESP8266HTTPClient.h> // HTTP通信用
+#include <ArduinoJson.h>      // JSON作成用
 #include <Adafruit_Sensor.h>
 #include <DHT.h>
 #include <Adafruit_GFX.h>
@@ -43,6 +45,12 @@ const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 9 * 3600; // 9時間 (秒単位)
 const int   daylightOffset_sec = 0;   // 夏時間なし
 
+// --- データPOST関連の設定 ---
+const int ROOM_ID = 13; // 部屋のID (定数)
+unsigned long lastPostTime = 0;
+// 10分 (ミリ秒)
+const long postInterval = 10 * 60 * 1000;
+
 // DHTセンサーのオブジェクトを作成
 DHT dht(DHTPIN, DHTTYPE);
 // OLEDディスプレイのオブジェクトを作成
@@ -50,7 +58,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // 天気情報更新用の変数
 unsigned long lastWeatherCheck = 0;
-const long weatherCheckInterval = 10 * 60 * 1000; // 10分 (ミリ秒)
+const long weatherCheckInterval = 1 * 60 * 1000; // 1分 (ミリ秒)
 bool isRainingSoon = false;
 int rainTime = 0;
 
@@ -138,6 +146,47 @@ void drawRainWarning() {
   }
 }
 
+// センサーデータをサーバーにPOSTする関数
+void postSensorData(float temp, float hum) {
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFiClient client;
+    HTTPClient http;
+
+    // JSONドキュメントを作成
+    // ArduinoJson v7以降では、サイズ指定のないJsonDocumentを使用します
+    JsonDocument doc;
+    doc["room"] = ROOM_ID;
+    doc["temp"] = temp;
+    doc["hum"] = hum;
+    doc["atm"] = nullptr; // atmはnull固定
+
+    String jsonPayload;
+    serializeJson(doc, jsonPayload);
+
+    Serial.println("Posting sensor data...");
+    Serial.println(jsonPayload);
+
+    // HTTP POSTリクエストを開始
+    http.begin(client, POST_URL);
+    http.addHeader("Content-Type", "application/json");
+
+    int httpResponseCode = http.POST(jsonPayload);
+
+    if (httpResponseCode > 0) {
+      String response = http.getString();
+      Serial.print("HTTP Response code: ");
+      Serial.println(httpResponseCode);
+      Serial.println(response);
+    } else {
+      Serial.print("Error on sending POST: ");
+      Serial.println(httpResponseCode);
+    }
+
+    http.end();
+  } else {
+    Serial.println("WiFi Disconnected. Cannot post data.");
+  }
+}
 
 void loop() {
   // スイッチが押されたかチェック (押されるとLOWになる)
@@ -202,6 +251,15 @@ void loop() {
   Serial.println(F(" *C"));
   Serial.println();
 
+  // 10分ごとにセンサーデータをPOST
+  if (currentMillis - lastPostTime >= postInterval) {
+    lastPostTime = currentMillis;
+    // NaNチェックをしてからPOST
+    if (!isnan(humidity) && !isnan(temperature)) {
+      postSensorData(temperature, humidity);
+    }
+  }
+
   // --- OLEDディスプレイに結果を出力 ---
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE); // 文字色を白に設定
@@ -210,6 +268,18 @@ void loop() {
   display.setTextSize(2);
   display.setCursor(12, 0); // 中央寄りに配置
   display.println(timeStr);
+
+  // 2行目: 次のPOSTまでの残り時間
+  unsigned long remainingMillis = postInterval - (currentMillis - lastPostTime);
+  // 投稿直後は大きな値になることがあるため、インターバルを超えないように補正
+  if (remainingMillis > postInterval) {
+    remainingMillis = postInterval;
+  }
+  int remainingMinutes = remainingMillis / 1000 / 60;
+  int remainingSeconds = (remainingMillis / 1000) % 60;
+  display.setTextSize(1);
+  display.setCursor(0, 18);
+  display.printf("Next POST: %02d:%02d", remainingMinutes, remainingSeconds);
 
   // 下段: 温度と湿度
   display.setTextSize(2);
