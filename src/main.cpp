@@ -46,6 +46,17 @@ const char *ntpServer = "pool.ntp.org";
 const long gmtOffset_sec = 9 * 3600; // 9時間 (秒単位)
 const int daylightOffset_sec = 0;    // 夏時間なし
 
+// --- スイッチ処理関連の定数と変数 ---
+const long LONG_PRESS_TIME = 1000; // 長押しと判断する時間 (ms)
+
+int switchState;
+int lastSwitchState = HIGH;
+unsigned long pressStartTime = 0;
+bool isPressing = false;
+bool longPressHandled = false;
+
+bool isDisplayOn = true; // 画面の表示状態を管理
+
 // --- データPOST関連の設定 ---
 const int ROOM_ID = 13; // 部屋のID (定数)
 unsigned long lastPostTime = 0;
@@ -156,33 +167,34 @@ void setup()
 // 雨雲接近の通知を描画する関数
 void drawRainWarning()
 {
-  display.setTextSize(1);
-  display.setCursor(0, 56);
   // isRainingSoonフラグに応じて文字色を切り替える
   if (isRainingSoon) // 雨が降る/降っている場合
   {
+    display.setTextSize(2);
+    display.setCursor(0, 48);
     // 点滅状態がtrueのときだけ描画する
     if (rainWarningBlinkState)
     {
       // 雨が近い場合は文字色を反転（黒文字、白背景）させて強調
       display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
-      display.print("Rain in ");
       if (rainTime == 0)
       {
-        display.printf("now! %.1fmm", rainAmount);
+        display.printf("Rain:%.1fmm", rainAmount);
       }
       else
       {
         // 表示が切り替わる際に前の表示が残らないよう、空白で埋める
-        display.printf("%dmin %.1fmm  ", rainTime, rainAmount);
+        display.printf("%dmin %.1fmm", rainTime, rainAmount);
       }
     }
   }
   else // 雨が降らない場合
   {
+    display.setTextSize(1);
+    display.setCursor(0, 56);
     // 通常時は白文字
     display.setTextColor(SSD1306_WHITE);
-    display.print("No rain for 1hr");
+    display.print("No rain for 1 hour");
   }
 }
 
@@ -242,27 +254,78 @@ void postSensorData(float temp, float hum)
   }
 }
 
+/**
+ * @brief スイッチの状態をチェックし、長押し/短押しを処理します。
+ */
+void handleSwitch()
+{
+  switchState = digitalRead(SWITCH_PIN);
+
+  // スイッチが押された瞬間
+  if (switchState == LOW && lastSwitchState == HIGH)
+  {
+    pressStartTime = millis();
+    isPressing = true;
+    longPressHandled = false;
+  }
+  // スイッチが離された瞬間
+  else if (switchState == HIGH && lastSwitchState == LOW)
+  {
+    if (isPressing && !longPressHandled)
+    {
+      // --- 短押し (Short Press) の処理 ---
+      if (isDisplayOn)
+      {
+        // 画面がONの時 -> WoLパケットを送信
+        Serial.println("Switch short pressed. Sending WoL packet...");
+
+        // OLEDに送信中メッセージを表示
+        display.clearDisplay();
+        display.setTextSize(2);
+        display.setTextColor(SSD1306_WHITE);
+        display.setCursor(0, 24);
+        display.println(F("Sending"));
+        display.println(F("  WoL..."));
+        display.display();
+
+        sendWolPacket(MAC_ADDRESS);
+        delay(2000); // メッセージを2秒間表示
+      }
+      else
+      {
+        // 画面がOFFの時 -> 画面をONにする
+        isDisplayOn = true;
+        display.ssd1306_command(SSD1306_DISPLAYON);
+        Serial.println("Display ON");
+      }
+    }
+    isPressing = false;
+  }
+
+  // スイッチが押されている間の処理
+  if (isPressing && !longPressHandled)
+  {
+    if (millis() - pressStartTime > LONG_PRESS_TIME)
+    {
+      // --- 長押し (Long Press) の処理 ---
+      if (isDisplayOn)
+      {
+        // 画面がONの時 -> 画面をOFFにする
+        isDisplayOn = false;
+        display.ssd1306_command(SSD1306_DISPLAYOFF);
+        Serial.println("Display OFF");
+      }
+      longPressHandled = true; // 長押し処理が完了したことをマーク
+    }
+  }
+
+  lastSwitchState = switchState;
+}
+
 void loop()
 {
-  // スイッチが押されたかチェック (押されるとLOWになる)
-  if (digitalRead(SWITCH_PIN) == LOW)
-  {
-    Serial.println("Switch pressed. Sending WoL packet...");
-
-    // OLEDに送信中メッセージを表示
-    display.clearDisplay();
-    display.setTextSize(2);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 24);
-    display.println(F("Sending"));
-    display.println(F("  WoL..."));
-    display.display();
-
-    // 自作関数でWoLマジックパケットを送信
-    sendWolPacket(MAC_ADDRESS);
-
-    delay(2000); // メッセージを2秒間表示
-  }
+  // D1ピンに接続されたスイッチの処理
+  handleSwitch();
 
   // Flashボタンが押されたかチェック (手動POST)
   if (digitalRead(FLASH_BUTTON_PIN) == LOW)
@@ -293,7 +356,6 @@ void loop()
       ;
   }
 
-  // --- 点滅処理 ---
   // 雨が降る予報の場合、点滅用の状態を切り替える
   if (isRainingSoon)
   {
@@ -303,8 +365,10 @@ void loop()
   {
     rainWarningBlinkState = true; // 雨が降らない場合は常に表示状態にする
   }
+
   // 天気情報を定期的にチェック
   unsigned long currentMillis = millis();
+
   if (currentMillis - lastWeatherCheck >= weatherCheckInterval)
   {
     lastWeatherCheck = currentMillis;
@@ -315,87 +379,97 @@ void loop()
     rainAmount = rainInfo.rainfall;
   }
 
-  // 湿度と温度を読み取る
-  float humidity = dht.readHumidity();
-  // 温度を摂氏で読み取る
-  float temperature = dht.readTemperature();
-
-  char timeStr[9]; // HH:MM:SS 形式 (8文字 + NULL終端)
-  // 時刻情報を取得
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo))
-  {
-    Serial.println("Failed to obtain time");
-    // 時刻取得失敗時は、表示を"--:--:--"に設定
-    strcpy(timeStr, "--:--:--");
-  }
-  strftime(timeStr, sizeof(timeStr), "%T", &timeinfo); // %T は %H:%M:%S と同じ
-
-  // 読み取りが成功したかチェック (失敗するとNaNを返します)
-  if (isnan(humidity) || isnan(temperature))
-  {
-    Serial.println(F("Failed to read from DHT sensor!"));
-    return;
-  }
-
-  // 温度オフセットを適用
-  temperature = temperature + TEMP_OFFSET;
-
-  // --- シリアルモニタに結果を出力 ---
-  Serial.print(F("Humidity: "));
-  Serial.print(humidity);
-  Serial.print(F("%  Temperature: "));
-  Serial.print(temperature);
-  Serial.println(F(" *C"));
-  Serial.println();
-
   // 10分ごとにセンサーデータをPOST
-  // unsigned long currentMillis = millis(); // 上で定義済みのためコメントアウト
   if (currentMillis - lastPostTime >= postInterval)
   {
     lastPostTime = currentMillis;
-    // NaNチェックをしてからPOST
+    // センサーを読み取り、NaNチェックをしてからPOST
+    float humidity = dht.readHumidity();
+    float temperature = dht.readTemperature();
     if (!isnan(humidity) && !isnan(temperature))
     {
+      temperature = temperature + TEMP_OFFSET; // オフセット適用
       postSensorData(temperature, humidity);
     }
   }
 
-  // --- OLEDディスプレイに結果を出力 ---
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE); // 文字色を白に設定
-
-  // 1行目: 時刻 (大きめの文字)
-  display.setTextSize(2);
-  display.setCursor(12, 0); // 中央寄りに配置
-  display.println(timeStr);
-
-  // 2行目: 次のPOSTまでの残り時間
-  unsigned long remainingMillis = postInterval - (currentMillis - lastPostTime);
-  // 投稿直後は大きな値になることがあるため、インターバルを超えないように補正
-  if (remainingMillis > postInterval)
+  // --- シリアルモニタへの定期ログ出力 ---
+  // 画面の状態に関わらず、センサー値などをシリアルに出力します。
+  // （POST用の読み取りとは別に、デバッグ用に毎秒読み取ります）
+  float debug_hum = dht.readHumidity();
+  float debug_temp = dht.readTemperature();
+  if (!isnan(debug_hum) && !isnan(debug_temp))
   {
-    remainingMillis = postInterval;
+    debug_temp = debug_temp + TEMP_OFFSET; // オフセット適用
+    Serial.print(F("Humidity: "));
+    Serial.print(debug_hum);
+    Serial.print(F("%  Temperature: "));
+    Serial.print(debug_temp);
+    Serial.println(F(" *C"));
   }
-  int remainingMinutes = remainingMillis / 1000 / 60;
-  int remainingSeconds = (remainingMillis / 1000) % 60;
-  display.setTextSize(1);
-  display.setCursor(0, 18);
-  display.printf("Next POST: %02d:%02d", remainingMinutes, remainingSeconds);
+  else
+  {
+    Serial.println(F("Failed to read from DHT sensor for serial log!"));
+  }
 
-  // 下段: 温度と湿度
-  display.setTextSize(2);
-  display.setCursor(0, 30);
-  display.print(temperature, 1);
-  display.print((char)247);
-  display.print("C ");
-  display.print(humidity, 0);
-  display.print("%");
+  // 画面がONのときだけ、描画処理を実行
+  if (isDisplayOn)
+  {
+    // 湿度と温度を読み取る (表示用)
+    float humidity = dht.readHumidity();
+    float temperature = dht.readTemperature();
 
-  // 雨雲情報を表示
-  drawRainWarning();
+    char timeStr[9]; // HH:MM:SS 形式 (8文字 + NULL終端)
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo))
+    {
+      Serial.println("Failed to obtain time for display");
+      strcpy(timeStr, "--:--:--");
+    }
+    else
+    {
+      strftime(timeStr, sizeof(timeStr), "%T", &timeinfo); // %T は %H:%M:%S と同じ
+    }
 
-  display.display(); // 画面に描画
+    // 読み取りが成功したかチェック
+    if (isnan(humidity) || isnan(temperature))
+    {
+      Serial.println(F("Failed to read from DHT sensor for display!"));
+    }
+    else
+    {
+      // 温度オフセットを適用
+      temperature = temperature + TEMP_OFFSET;
+    }
+
+    // --- OLEDディスプレイに結果を出力 ---
+    display.clearDisplay();
+    display.setTextColor(SSD1306_WHITE);
+
+    display.setTextSize(2);
+    display.setCursor(12, 0);
+    display.println(timeStr);
+
+    unsigned long remainingMillis = postInterval - (currentMillis - lastPostTime);
+    if (remainingMillis > postInterval)
+      remainingMillis = postInterval;
+    int remainingMinutes = remainingMillis / 1000 / 60;
+    int remainingSeconds = (remainingMillis / 1000) % 60;
+    display.setTextSize(1);
+    display.setCursor(0, 18);
+    display.printf("Next POST: %02d:%02d", remainingMinutes, remainingSeconds);
+
+    display.setTextSize(2);
+    display.setCursor(0, 30);
+    display.print(temperature, 1);
+    display.print((char)247);
+    display.print("C ");
+    display.print(humidity, 0);
+    display.print("%");
+
+    drawRainWarning();
+    display.display();
+  }
 
   delay(1000); // ループの負荷を軽減
 }
