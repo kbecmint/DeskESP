@@ -8,9 +8,10 @@
 #include <DHT.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include "secrets.h" // MACアドレスなどの機密情報
-#include "wol.h"     // WoL送信関数
-#include "weather.h" // 天気情報取得関数
+#include "secrets.h"      // MACアドレスなどの機密情報
+#include "wol.h"          // WoL送信関数
+#include "weather.h"      // 天気情報取得関数
+#include "wifi_handler.h" // WiFi接続ハンドラ
 
 // --- 静的IPアドレスの設定 ---
 // ご自身のネットワーク環境に合わせて変更してください
@@ -63,6 +64,11 @@ unsigned long lastPostTime = 0;
 // 10分 (ミリ秒)
 const long postInterval = 10 * 60 * 1000;
 
+// POST結果表示用の変数
+int lastPostResult = 0; // 0:未実行, >0:HTTPコード, <0:クライアントエラー
+unsigned long postResultDisplayStart = 0;
+const long postResultDisplayDuration = 5000; // 5秒間表示
+
 // DHTセンサーのオブジェクトを作成
 DHT dht(DHTPIN, DHTTYPE);
 // OLEDディスプレイのオブジェクトを作成
@@ -110,29 +116,8 @@ void setup()
   display.println(F("Booting.."));
   display.display(); // ここで一度表示
 
-  // 静的IPアドレスを設定
-  // これにより、DHCP関連の問題を回避できる可能性があります
-  if (!WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS))
-  {
-    Serial.println("STA Failed to configure");
-    // 画面にも設定失敗を表示しても良い
-  }
-
   // Wi-Fiに接続
-  WiFi.begin(ssid, password);
-  Serial.print("Connecting");
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setCursor(0, 28);
-  display.print("Connecting to WiFi");
-  display.display();
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    delay(500);
-    Serial.print(".");
-    display.print(".");
-    display.display();
-  }
+  ensureWiFiConnected(&display);
   Serial.println(" Connected!");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
@@ -148,12 +133,15 @@ void setup()
   display.print("Checking weather...");
   display.display();
 
-  RainInfo rainInfo = checkRainCloud();
-  isRainingSoon = rainInfo.willRain;
-  rainTime = rainInfo.minutesUntilRain;
-  rainAmount = rainInfo.rainfall;
-  lastWeatherCheck = millis(); // 次の定期チェックタイマーをリセット
-  delay(1000);                 // メッセージを少し表示
+  if (ensureWiFiConnected(&display))
+  {
+    RainInfo rainInfo = checkRainCloud();
+    isRainingSoon = rainInfo.willRain;
+    rainTime = rainInfo.minutesUntilRain;
+    rainAmount = rainInfo.rainfall;
+    lastWeatherCheck = millis(); // 次の定期チェックタイマーをリセット
+    delay(1000);                 // メッセージを少し表示
+  }
 
   // DHTセンサーを初期化
   dht.begin();
@@ -199,10 +187,12 @@ void drawRainWarning()
 }
 
 // センサーデータをサーバーにPOSTする関数
-void postSensorData(float temp, float hum)
+int postSensorData(float temp, float hum)
 {
-  if (WiFi.status() == WL_CONNECTED)
+  int httpResponseCode = 0;
+  if (ensureWiFiConnected(&display))
   {
+    // 接続が確認できたので処理を続行
     // HTTPS通信のためにWiFiClientSecureを使用
     WiFiClientSecure client;
     // ★★★ サーバー証明書の検証をスキップ（デバッグ用） ★★★
@@ -231,7 +221,7 @@ void postSensorData(float temp, float hum)
     // User-Agentを一般的なブラウザに偽装して、サーバー側のブロックを回避する
     http.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36");
 
-    int httpResponseCode = http.POST(jsonPayload);
+    httpResponseCode = http.POST(jsonPayload);
 
     if (httpResponseCode > 0)
     {
@@ -251,7 +241,9 @@ void postSensorData(float temp, float hum)
   else
   {
     Serial.println("WiFi Disconnected. Cannot post data.");
+    httpResponseCode = -1; // WiFi未接続エラー
   }
+  return httpResponseCode;
 }
 
 /**
@@ -278,6 +270,10 @@ void handleSwitch()
       {
         // 画面がONの時 -> WoLパケットを送信
         Serial.println("Switch short pressed. Sending WoL packet...");
+
+        // WoL送信前にWiFi接続を確認・復旧
+        if (!ensureWiFiConnected(&display))
+          return;
 
         // OLEDに送信中メッセージを表示
         display.clearDisplay();
@@ -341,7 +337,9 @@ void loop()
     {
       // 温度オフセットを適用
       temp = temp + TEMP_OFFSET;
-      postSensorData(temp, hum);
+      lastPostResult = postSensorData(temp, hum);
+      postResultDisplayStart = millis(); // 結果表示の開始時刻を記録
+
       // 次の定期POSTまでのタイマーをリセット
       lastPostTime = millis();
     }
@@ -373,10 +371,13 @@ void loop()
   {
     lastWeatherCheck = currentMillis;
     Serial.println("\nChecking for rain clouds...");
-    RainInfo rainInfo = checkRainCloud();
-    isRainingSoon = rainInfo.willRain;
-    rainTime = rainInfo.minutesUntilRain;
-    rainAmount = rainInfo.rainfall;
+    if (ensureWiFiConnected(&display))
+    {
+      RainInfo rainInfo = checkRainCloud();
+      isRainingSoon = rainInfo.willRain;
+      rainTime = rainInfo.minutesUntilRain;
+      rainAmount = rainInfo.rainfall;
+    }
   }
 
   // 10分ごとにセンサーデータをPOST
@@ -389,7 +390,8 @@ void loop()
     if (!isnan(humidity) && !isnan(temperature))
     {
       temperature = temperature + TEMP_OFFSET; // オフセット適用
-      postSensorData(temperature, humidity);
+      lastPostResult = postSensorData(temperature, humidity);
+      postResultDisplayStart = millis(); // 結果表示の開始時刻を記録
     }
   }
 
@@ -457,7 +459,26 @@ void loop()
     int remainingSeconds = (remainingMillis / 1000) % 60;
     display.setTextSize(1);
     display.setCursor(0, 18);
-    display.printf("Next POST: %02d:%02d", remainingMinutes, remainingSeconds);
+
+    // POST結果の表示ロジック
+    bool lastPostFailed = (lastPostResult <= 0 && lastPostResult != 0);
+    bool showSuccessMessage = (lastPostResult > 0 && currentMillis - postResultDisplayStart < postResultDisplayDuration);
+
+    if (showSuccessMessage)
+    {
+      // 成功時は5秒間だけ結果を表示
+      display.printf("POST OK (%d)", lastPostResult);
+    }
+    else if (lastPostFailed)
+    {
+      // 失敗時は、カウントダウンの横に失敗コードを表示し続ける
+      display.printf("Post in: %02d:%02d (F:%d)", remainingMinutes, remainingSeconds, lastPostResult);
+    }
+    else
+    {
+      // 通常時はカウントダウンのみ表示
+      display.printf("Post in: %02d:%02d", remainingMinutes, remainingSeconds);
+    }
 
     display.setTextSize(2);
     display.setCursor(0, 30);

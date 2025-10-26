@@ -74,12 +74,6 @@ RainInfo checkRainCloud()
 {
   RainInfo rainInfo = {false, 0, 0.0, ""};
 
-  if (WiFi.status() != WL_CONNECTED)
-  {
-    rainInfo.statusMessage = "WiFi not connected";
-    return rainInfo;
-  }
-
   // HTTPS通信のためにWiFiClientSecureを使用
   WiFiClientSecure client;
   // Yahoo APIはドメインが固定なので、証明書の検証をスキップしてもリスクは比較的低い
