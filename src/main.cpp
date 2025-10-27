@@ -65,7 +65,8 @@ unsigned long lastPostTime = 0;
 const long postInterval = 10 * 60 * 1000;
 
 // POST結果表示用の変数
-int lastPostResult = 0; // 0:未実行, >0:HTTPコード, <0:クライアントエラー
+int lastPostResult = 0;          // 0:未実行, >0:HTTPコード, <0:クライアントエラー
+String lastPostErrorString = ""; // POST失敗時の詳細エラーメッセージ
 unsigned long postResultDisplayStart = 0;
 const long postResultDisplayDuration = 5000; // 5秒間表示
 
@@ -235,6 +236,10 @@ int postSensorData(float temp, float hum)
       Serial.print("Error on sending POST: ");
       Serial.println(httpResponseCode);
     }
+    // エラーコードを文字列に変換
+    lastPostErrorString = http.errorToString(httpResponseCode);
+    // シリアルモニターにも詳細なエラーメッセージを出力
+    Serial.printf("[HTTP] POST... failed, error: %s\n", lastPostErrorString.c_str());
 
     http.end();
   }
@@ -242,6 +247,7 @@ int postSensorData(float temp, float hum)
   {
     Serial.println("WiFi Disconnected. Cannot post data.");
     httpResponseCode = -1; // WiFi未接続エラー
+    lastPostErrorString = "WiFi Disconnected";
   }
   return httpResponseCode;
 }
@@ -472,7 +478,12 @@ void loop()
     else if (lastPostFailed)
     {
       // 失敗時は、カウントダウンの横に失敗コードを表示し続ける
-      display.printf("Post in: %02d:%02d (F:%d)", remainingMinutes, remainingSeconds, lastPostResult);
+      // エラーメッセージが長い場合があるので、先頭から一部だけ表示
+      char errorSnippet[15];
+      strncpy(errorSnippet, lastPostErrorString.c_str(), sizeof(errorSnippet) - 1);
+      errorSnippet[sizeof(errorSnippet) - 1] = '\0';
+
+      display.printf("Post in: %02d:%02d (%s)", remainingMinutes, remainingSeconds, errorSnippet);
     }
     else
     {
