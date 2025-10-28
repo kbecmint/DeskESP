@@ -194,11 +194,17 @@ int postSensorData(float temp, float hum)
   if (ensureWiFiConnected(&display))
   {
     // 接続が確認できたので処理を続行
-    // HTTPS通信のためにWiFiClientSecureを使用
-    WiFiClientSecure client;
-    // ★★★ サーバー証明書の検証をスキップ（デバッグ用） ★★★
-    // 本番環境では、setFingerprintやsetCACertで検証することを推奨します
-    client.setInsecure();
+    // WiFiClientSecureはスコープを抜けるときに自動的にリソースを解放します
+    std::unique_ptr<WiFiClientSecure> client(new WiFiClientSecure);
+
+    if (!client)
+    {
+      lastPostErrorString = "Out of memory";
+      Serial.println(lastPostErrorString);
+      return -100; // メモリ不足を示す独自のエラーコード
+    }
+
+    client->setInsecure(); // 証明書の検証をスキップ
 
     HTTPClient http;
 
@@ -217,7 +223,7 @@ int postSensorData(float temp, float hum)
     Serial.println(jsonPayload);
 
     // HTTP POSTリクエストを開始
-    http.begin(client, POST_URL);
+    http.begin(*client, POST_URL);
     http.addHeader("Content-Type", "application/json");
     // User-Agentを一般的なブラウザに偽装して、サーバー側のブロックを回避する
     http.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36");

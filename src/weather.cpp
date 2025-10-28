@@ -74,48 +74,50 @@ RainInfo checkRainCloud()
 {
   RainInfo rainInfo = {false, 0, 0.0, ""};
 
-  // HTTPS通信のためにWiFiClientSecureを使用
-  WiFiClientSecure client;
-  // Yahoo APIはドメインが固定なので、証明書の検証をスキップしてもリスクは比較的低い
-  client.setInsecure();
   HTTPClient http;
+  // WiFiClientSecureはスコープを抜けるときに自動的にリソースを解放します
+  std::unique_ptr<WiFiClientSecure> client(new WiFiClientSecure);
+
+  if (!client)
+  {
+    rainInfo.statusMessage = "Out of memory";
+    Serial.println(rainInfo.statusMessage);
+    return rainInfo;
+  }
+
+  client->setInsecure(); // 証明書の検証をスキップ
 
   // APIエンドポイントのURLを構築
-  String url = "https://map.yahooapis.jp/weather/V1/place?coordinates=";
-  url += LONGITUDE;
-  url += ",";
-  url += LATITUDE;
-  url += "&appid=";
-  url += YAHOO_APP_ID;
-  url += "&output=json&interval=5"; // 5分間隔のデータを取得
+  const String url = "https://map.yahooapis.jp/weather/V1/place?coordinates=" + String(LONGITUDE) + "," + String(LATITUDE) + "&appid=" + String(YAHOO_APP_ID) + "&output=json&interval=5";
 
   Serial.print("Requesting URL: ");
   Serial.println(url);
 
-  if (http.begin(client, url))
+  if (http.begin(*client, url))
   {
     int httpCode = http.GET();
 
     if (httpCode > 0)
     {
-      if (httpCode == HTTP_CODE_OK)
+      if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY)
       {
         rainInfo = parseYahooWeatherJson(http.getString());
       }
       else
       {
-        rainInfo.statusMessage = "HTTP Error: " + String(httpCode);
+        rainInfo.statusMessage = "HTTP GET Error: " + String(httpCode);
       }
     }
     else
     {
-      rainInfo.statusMessage = "HTTP GET failed";
+      // GETリクエスト失敗時の詳細なエラーを取得
+      rainInfo.statusMessage = http.errorToString(httpCode).c_str();
     }
     http.end();
   }
   else
   {
-    rainInfo.statusMessage = "HTTP connection failed";
+    rainInfo.statusMessage = "HTTP begin failed";
   }
 
   Serial.println(rainInfo.statusMessage);
