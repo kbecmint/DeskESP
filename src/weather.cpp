@@ -33,11 +33,14 @@ RainInfo parseYahooWeatherJson(const String &payload)
   Serial.println(F("----------------------------"));
 
   Serial.println("--- Precipitation Forecast (10-60 min) ---");
-  String firstDateStr = weatherList[0]["Date"].as<String>();
+  // 日付文字列(YYYYMMDDHHmm)を数値として取得し、メモリ効率を改善
+  long long firstDateNum = weatherList[0]["Date"].as<long long>();
 
   // 基準となる時刻を分単位で計算
-  int firstHour = firstDateStr.substring(8, 10).toInt();
-  int firstMinute = firstDateStr.substring(10, 12).toInt();
+  // (firstDateNum / 100) % 100 -> HH (時)
+  // firstDateNum % 100 -> mm (分)
+  int firstHour = (firstDateNum / 100) % 100;
+  int firstMinute = firstDateNum % 100;
   int firstTotalMinutes = firstHour * 60 + firstMinute;
 
   // 最初の雨が降る時間を探す
@@ -45,9 +48,9 @@ RainInfo parseYahooWeatherJson(const String &payload)
   {
     // 降水量は小数点を含むためfloatで取得する
     float rainFall = weather["Rainfall"];
-    String currentDateStr = weather["Date"].as<String>();
-    int currentHour = currentDateStr.substring(8, 10).toInt();
-    int currentMinute = currentDateStr.substring(10, 12).toInt();
+    long long currentDateNum = weather["Date"].as<long long>();
+    int currentHour = (currentDateNum / 100) % 100;
+    int currentMinute = currentDateNum % 100;
     int minutes = (currentHour * 60 + currentMinute) - firstTotalMinutes;
 
     // 10分後から60分後の予報をシリアルに出力
