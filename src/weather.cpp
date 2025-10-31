@@ -5,19 +5,9 @@
 #include <ESP8266HTTPClient.h>
 #include <ArduinoJson.h>
 
-RainInfo parseYahooWeatherJson(const String &payload)
+RainInfo parseYahooWeatherJson(JsonDocument &doc)
 {
   RainInfo rainInfo = {false, 0, 0.0, ""};
-  JsonDocument doc;
-  DeserializationError error = deserializeJson(doc, payload);
-
-  if (error)
-  {
-    Serial.print(F("deserializeJson() failed: "));
-    Serial.println(error.f_str());
-    rainInfo.statusMessage = "JSON Parse Error";
-    return rainInfo;
-  }
 
   JsonArray weatherList = doc["Feature"][0]["Property"]["WeatherList"]["Weather"].as<JsonArray>();
   if (weatherList.isNull() || weatherList.size() == 0)
@@ -91,10 +81,29 @@ RainInfo checkRainCloud()
   client->setInsecure(); // 証明書の検証をスキップ
 
   // APIエンドポイントのURLを構築
-  const String url = "https://map.yahooapis.jp/weather/V1/place?coordinates=" + String(LONGITUDE) + "," + String(LATITUDE) + "&appid=" + String(YAHOO_APP_ID) + "&output=json&interval=5";
+  // Stringの連結はメモリの断片化を引き起こすため、snprintfを使用してURLを構築する
+  char url[256];
+  snprintf(url, sizeof(url),
+           "https://map.yahooapis.jp/weather/V1/place?coordinates=%s,%s&appid=%s&output=json&interval=5",
+           LONGITUDE, LATITUDE, YAHOO_APP_ID);
 
   Serial.print("Requesting URL: ");
   Serial.println(url);
+
+  // --- DNS名前解決のテスト ---
+  IPAddress resolvedIP;
+  const char *host = "map.yahooapis.jp";
+  Serial.printf("Resolving DNS for %s... ", host);
+  if (!WiFi.hostByName(host, resolvedIP))
+  {
+    Serial.println("DNS lookup failed!");
+    rainInfo.statusMessage = "DNS lookup failed";
+    return rainInfo;
+  }
+  Serial.printf("OK. IP: %s\n", resolvedIP.toString().c_str());
+
+  // --- 通信直前のシステム状態をログ出力 ---
+  Serial.printf("[Pre-GET] Free Heap: %u bytes, WiFi Status: %d, RSSI: %d dBm\n", ESP.getFreeHeap(), WiFi.status(), WiFi.RSSI());
 
   if (http.begin(*client, url))
   {
@@ -104,7 +113,14 @@ RainInfo checkRainCloud()
     {
       if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY)
       {
-        rainInfo = parseYahooWeatherJson(http.getString());
+        // チャンク形式のレスポンスを確実に処理するため、一度Stringに全データを受信してから解析する。
+        String payload = http.getString();
+        JsonDocument doc;
+        DeserializationError error = deserializeJson(doc, payload);
+        if (error)
+          rainInfo.statusMessage = "JSON Parse Error";
+        else
+          rainInfo = parseYahooWeatherJson(doc);
       }
       else
       {

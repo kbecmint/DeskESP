@@ -82,7 +82,11 @@ const long weatherCheckInterval = 1 * 60 * 1000; // 1分 (ミリ秒)
 bool isRainingSoon = false;
 int rainTime = 0;
 float rainAmount = 0.0;
-bool rainWarningBlinkState = true; // 雨予報の点滅表示用
+
+// --- 非ブロッキングループ用のタイマー ---
+unsigned long lastLoopTime = 0;
+const long loopInterval = 1000;    // 1秒
+bool rainWarningBlinkState = true; // 1秒ごとのループで状態を反転させる
 
 void setup()
 {
@@ -221,6 +225,9 @@ int postSensorData(float temp, float hum)
 
     Serial.println("Posting sensor data...");
     Serial.println(jsonPayload);
+
+    // --- 通信直前のシステム状態をログ出力 ---
+    Serial.printf("[Pre-POST] Free Heap: %u bytes, WiFi Status: %d, RSSI: %d dBm\n", ESP.getFreeHeap(), WiFi.status(), WiFi.RSSI());
 
     // HTTP POSTリクエストを開始
     http.begin(*client, POST_URL);
@@ -366,18 +373,13 @@ void loop()
       ;
   }
 
-  // 雨が降る予報の場合、点滅用の状態を切り替える
-  if (isRainingSoon)
-  {
-    rainWarningBlinkState = !rainWarningBlinkState;
-  }
-  else
-  {
-    rainWarningBlinkState = true; // 雨が降らない場合は常に表示状態にする
-  }
-
   // 天気情報を定期的にチェック
   unsigned long currentMillis = millis();
+
+  // --- 1秒ごとのメイン処理 ---
+  if (currentMillis - lastLoopTime < loopInterval)
+    return;
+  lastLoopTime = currentMillis;
 
   if (currentMillis - lastWeatherCheck >= weatherCheckInterval)
   {
@@ -405,6 +407,16 @@ void loop()
       lastPostResult = postSensorData(temperature, humidity);
       postResultDisplayStart = millis(); // 結果表示の開始時刻を記録
     }
+  }
+
+  // 雨が降る予報の場合、点滅用の状態を切り替える
+  if (isRainingSoon)
+  {
+    rainWarningBlinkState = !rainWarningBlinkState;
+  }
+  else
+  {
+    rainWarningBlinkState = true; // 雨が降らない場合は常に表示状態にする
   }
 
   // --- シリアルモニタへの定期ログ出力 ---
@@ -509,5 +521,7 @@ void loop()
     display.display();
   }
 
-  delay(1000); // ループの負荷を軽減
+  // delay()はWiFi接続を不安定にするため使用しない。
+  // yield()を呼び出してバックグラウンド処理にCPU時間を譲る。
+  yield();
 }

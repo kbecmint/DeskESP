@@ -14,6 +14,12 @@ bool ensureWiFiConnected(Adafruit_SSD1306 *display)
 {
     if (WiFi.status() == WL_CONNECTED)
     {
+        // DNS解決失敗からの回復を試みるため、接続済みの場合でもDNSサーバーを再設定する。
+        // これにより、長時間稼働中にDNS設定が失われる問題に対処する。
+        if (!WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS))
+        {
+            Serial.println("STA Failed to re-configure DNS");
+        }
         return true; // すでに接続済み
     }
 
@@ -46,7 +52,12 @@ bool ensureWiFiConnected(Adafruit_SSD1306 *display)
             display->print(".");
             display->display();
         }
-        delay(500);
+        // delay()はバックグラウンド処理をブロックするため、短いdelayとyield()を組み合わせる
+        for (int i = 0; i < 50; i++)
+        {
+            delay(10);
+            yield();
+        }
     }
 
     if (WiFi.status() == WL_CONNECTED)
