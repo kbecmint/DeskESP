@@ -145,7 +145,17 @@ void setup()
     rainTime = rainInfo.minutesUntilRain;
     rainAmount = rainInfo.rainfall;
     lastWeatherCheck = millis(); // 次の定期チェックタイマーをリセット
-    delay(1000);                 // メッセージを少し表示
+    // DNS障害からの最終回復処理: システムを再起動する
+    if (rainInfo.statusMessage == "DNS lookup failed")
+    {
+      Serial.println("\n--- Unrecoverable DNS Failure Detected. Restarting system... ---");
+      display.clearDisplay();
+      display.println("DNS Failed.\nRestarting...");
+      display.display();
+      delay(3000); // メッセージを3秒間表示
+      ESP.restart();
+    }
+    delay(1000); // メッセージを少し表示
   }
 
   // DHTセンサーを初期化
@@ -391,6 +401,17 @@ void loop()
       isRainingSoon = rainInfo.willRain;
       rainTime = rainInfo.minutesUntilRain;
       rainAmount = rainInfo.rainfall;
+
+      // DNS障害からの最終回復処理: システムを再起動する
+      if (rainInfo.statusMessage == "DNS lookup failed")
+      {
+        Serial.println("\n--- Unrecoverable DNS Failure Detected. Restarting system... ---");
+        display.clearDisplay();
+        display.println("DNS Failed.\nRestarting...");
+        display.display();
+        delay(3000); // メッセージを3秒間表示
+        ESP.restart();
+      }
     }
   }
 
@@ -406,6 +427,17 @@ void loop()
       temperature = temperature + TEMP_OFFSET; // オフセット適用
       lastPostResult = postSensorData(temperature, humidity);
       postResultDisplayStart = millis(); // 結果表示の開始時刻を記録
+
+      // DNS障害からの最終回復処理 (postSensorDataは内部でエラーメッセージを設定する)
+      if (lastPostErrorString.indexOf("DNS") != -1)
+      {
+        Serial.println("\n--- Unrecoverable DNS Failure Detected. Restarting system... ---");
+        display.clearDisplay();
+        display.println("DNS Failed.\nRestarting...");
+        display.display();
+        delay(3000); // メッセージを3秒間表示
+        ESP.restart();
+      }
     }
   }
 
@@ -499,6 +531,13 @@ void loop()
       // エラーメッセージが長い場合があるので、先頭から一部だけ表示
       char errorSnippet[15];
       strncpy(errorSnippet, lastPostErrorString.c_str(), sizeof(errorSnippet) - 1);
+
+      // DNSエラーの場合は特別に表示
+      if (lastPostErrorString.indexOf("DNS") != -1)
+      {
+        strncpy(errorSnippet, "DNS Failed", sizeof(errorSnippet) - 1);
+      }
+
       errorSnippet[sizeof(errorSnippet) - 1] = '\0';
 
       display.printf("Post in: %02d:%02d (%s)", remainingMinutes, remainingSeconds, errorSnippet);

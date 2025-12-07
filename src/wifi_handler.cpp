@@ -69,3 +69,21 @@ bool ensureWiFiConnected(Adafruit_SSD1306 *display)
     Serial.println("\nFailed to reconnect WiFi.");
     return false;
 }
+
+/**
+ * @brief WiFiを強制的に切断し、再接続を試みる。DNS障害などからの回復に使用する。
+ *
+ * @param display OLEDディスプレイのポインタ
+ * @return bool 再接続に成功した場合はtrue
+ */
+bool forceWiFiReconnect(Adafruit_SSD1306 *display)
+{
+    Serial.println("\n--- Forcing WiFi Reconnection ---");
+    WiFi.disconnect(); // ネットワークスタックをリセットするために、まず切断する
+    for (int i = 0; i < 10; i++)
+    { // 切断処理を待つ
+        delay(100);
+        yield();
+    }
+    return ensureWiFiConnected(display); // 通常の再接続処理を呼び出す
+}
